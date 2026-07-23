@@ -126,7 +126,9 @@ def human_lang_name(code: str) -> str:
 # --- Step 1: download -------------------------------------------------------
 
 
-def download(url: str, out_dir: Path) -> Path:
+def download(
+    url: str, out_dir: Path, cookies_from_browser: Optional[str] = None
+) -> Path:
     """Download the given YouTube URL into out_dir; return the resulting file path."""
     ensure_tool("yt-dlp")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -137,14 +139,28 @@ def download(url: str, out_dir: Path) -> Path:
         "--restrict-filenames",
         "--merge-output-format", "mp4",
         "-f", "bv*+ba/b",
+    ]
+    if cookies_from_browser:
+        cmd.extend(["--cookies-from-browser", cookies_from_browser])
+    cmd.extend([
         "-o", str(out_dir / "%(title)s.%(ext)s"),
         url,
-    ]
-    print("  $ yt-dlp " + " ".join(cmd[1:]))
+    ])
+    print("  $ " + subprocess.list2cmdline(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         # yt-dlp prints useful diagnostics to stderr when it fails.
-        sys.stderr.write(proc.stderr or proc.stdout or "")
+        diagnostics = proc.stderr or proc.stdout or ""
+        sys.stderr.write(diagnostics)
+        if not cookies_from_browser and re.search(
+            r"(?:HTTP Error )?403|Forbidden", diagnostics, re.IGNORECASE
+        ):
+            if diagnostics and not diagnostics.endswith("\n"):
+                sys.stderr.write("\n")
+            sys.stderr.write(
+                "Hint: retry with `--cookies-from-browser chrome` to let yt-dlp "
+                "use your signed-in Chrome session.\n"
+            )
         raise SystemExit(f"yt-dlp failed with exit code {proc.returncode}")
 
     # yt-dlp prints "Destination: <path>" on success — try to parse it first.
@@ -519,6 +535,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Output directory (default: ./out)",
     )
     parser.add_argument(
+        "--cookies-from-browser",
+        metavar="BROWSER[+KEYRING][:PROFILE][::CONTAINER]",
+        help=(
+            "Load cookies from a browser for yt-dlp (for example: chrome). "
+            "Useful when YouTube rejects an unauthenticated download with HTTP 403."
+        ),
+    )
+    parser.add_argument(
         "--model",
         default="small",
         choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"],
@@ -606,7 +630,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # Step 1: download
     print(f"[1/4] Downloading {args.url}")
-    video_path = download(args.url, work)
+    video_path = download(args.url, work, args.cookies_from_browser)
     base = video_path.stem
 
     # Step 2: transcribe

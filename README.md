@@ -61,10 +61,29 @@ python youtranslate.py "URL" --output ./out --keep-srt
 This will additionally produce `<title>.en.srt` (original) and
 `<title>.en.de.srt` (translated).
 
+### HTTP 403: use your Chrome session
+
+Some YouTube videos reject anonymous yt-dlp requests with `HTTP Error 403:
+Forbidden`. If the video works while you are signed in to Google Chrome, let
+yt-dlp read that browser profile's cookies:
+
+```bash
+python youtranslate.py "URL" --cookies-from-browser chrome
+```
+
+This passes yt-dlp's `--cookies-from-browser` option directly, so its complete
+browser syntax is supported. To select a non-default Chrome profile, for
+example, use `--cookies-from-browser "chrome:Profile 2"`. Close Chrome first if
+yt-dlp reports that its cookie database is locked. Cookies stay in Chrome's
+profile and are not copied into the output directory, but they grant access as
+your signed-in account; do not share command output or browser profile data.
+Use this only for videos you are allowed to access and download.
+
 ### Useful flags
 
 | Flag | What it does | Default |
 |---|---|---|
+| `--cookies-from-browser` | Load cookies from a browser for yt-dlp (for example, `chrome`) | off |
 | `--model` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3` | `small` |
 | `--engine` | `openai-whisper` or `faster-whisper` | `openai-whisper` |
 | `--source-lang` | Source language code (`en`, `fr`, `de`, `ja`, ...) or `auto` to let Whisper detect | `auto` |

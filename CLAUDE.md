@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Letzter Durchlauf
 
-Merge-Konflikt in `CLAUDE.md` (gleichzeitig `AGENTS.md` über Symlink) aufgelöst:
-Die Zeilen 93–104 enthielten `<<<<<<< HEAD` / `=======` / `>>>>>>>`
-Marker, die zwei konkurrierende Beschreibungen der gleichen Code-Stellen
-mischten. Tatsächlich enthält `youtranslate.py` **beide** Änderungen
-– `font_size = max(10, min(24, int(height / 100)))` (Z. 425) **und**
-den `--burn-encoder {auto,nvenc,libx264}` Schalter (Z. 586–589, 670–672).
-Der Konflikt war rein dokumentarisch; die Codebasis ist konsistent. Der
-resolvierte Block dokumentiert beide Features korrekt und beschreibt auch
-das Auto/NVENC/libx264-Verhalten einschließlich der `--soft-subs`-
-Alternative für bit-exakte Wiedergabe.
+HTTP-403-Fehler beim YouTube-Download adressiert: Die CLI akzeptiert jetzt
+`--cookies-from-browser` und reicht die vollständige Browser-Spezifikation
+(z. B. `chrome` oder `chrome:Profile 2`) als getrennte Argumente an yt-dlp
+weiter. Ohne Cookie-Option bleibt das bisherige Verhalten unverändert; erkennt
+yt-dlp dabei `403`/`Forbidden`, erscheint ein konkreter Hinweis auf
+`--cookies-from-browser chrome`. README, CLI-Hilfe und Sicherheits-/Profilhinweise
+wurden ergänzt. Der Flow wurde ohne Netzverkehr über die echte CLI mit lokalen
+yt-dlp/ffmpeg-Testdoubles verifiziert: Standard- und Chrome-Aufruf, Profilname
+mit Leerzeichen, 403-Hinweis, fehlender Optionswert und die bestehende
+Destination-Auswertung funktionieren.
 
 ## What this is
 
@@ -85,7 +85,11 @@ Source and target languages are independent.
 - **`download()` finds the output file in two ways**: first it scans
   yt-dlp's stdout for a `[Destination] / [Merged]` line; failing that, it
   picks the most recently modified `.mp4`/`.mkv`/`.webm` in the output
-  directory. Keep both paths when changing this.
+  directory. Keep both paths when changing this. `--cookies-from-browser`
+  forwards yt-dlp's complete browser specification (for example `chrome` or
+  `chrome:Profile 2`) without copying cookies into the project. When an
+  unauthenticated download reports 403/Forbidden, `download()` suggests the
+  Chrome option; it does not retry automatically or silently use credentials.
 - **Per-segment translation retries 3× with exponential-ish backoff**
   inside `translate_segments_deep()`. The catch is intentionally wide
   (`except Exception`) because deep-translator raises a variety of types
