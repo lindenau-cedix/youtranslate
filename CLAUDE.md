@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`youtranslate` is a single-file CLI tool that downloads an English YouTube
-video, transcribes it, translates the speech to German (or another language),
-and burns the translated subtitles into the video. There is no package, no
-test suite, no build step — just `youtranslate.py` plus a dependency manifest.
+`youtranslate` is a single-file CLI tool that downloads a YouTube video in
+any language, transcribes it, translates the speech to another language, and
+burns the translated subtitles into the video. There is no package, no test
+suite, no build step — just `youtranslate.py` plus a dependency manifest.
 
 ## Pipeline architecture
 
@@ -23,12 +23,32 @@ and the two translators stay swappable.
 | 3. Translate | `translate_segments_deep()` / `translate_segments_openai()` | **`openai`** (Chat Completions) | `--translator` |
 | 4. Burn / attach | `burn_subtitles()` (libass) or the soft-sub branch in `main()` | ffmpeg + libass, hardcoded | `--soft-subs` |
 
+`transcribe()` returns `(segments, detected_lang)` — both backends expose
+Whisper's detected source code, and `main()` uses it for filenames and
+status printout when the user didn't pin `--source-lang`.
+
 The two backends in stage 3 are deliberately asymmetric: `deep` is Google
 Translate per-segment via `deep_translator.GoogleTranslator` (free, no key,
 slower per call). `openai` uses `gpt-4o-mini` (override via
 `OPENAI_TRANSLATE_MODEL`). Both translate per-segment to preserve
 Whisper's exact timing — do not "improve" this by translating the whole
 transcript and re-aligning; it's a documented trade-off in the README.
+
+## Languages
+
+Source and target languages are independent.
+
+- `--source-lang` (default `auto`): ISO-639-1 code or `auto` to let Whisper
+  detect from audio. With `auto`, the `language=` kwarg is dropped from
+  Whisper's `transcribe()` call so detection runs.
+- `--target-lang` (default `de`): any code `deep_translator` or `babel` can
+  handle, including regional tags like `pt-BR`.
+- `human_lang_name(code)` resolves a code to its English display name via
+  `babel.Locale.parse(...).get_display_name("en")`. Used for the OpenAI
+  translator prompt and the final printout. Falls back to the raw code if
+  `babel` is missing or the code is unparseable — never raises.
+- Output filenames follow `<title>.<src>.<tgt>.<ext>`: `<src>` is
+  `--source-lang` if pinned, otherwise the language Whisper detected.
 
 ## Conventions worth knowing
 
@@ -77,7 +97,7 @@ python3 youtranslate.py --help
 ```
 
 Deps for the optional backends (`openai-whisper`, `openai`,
-`faster-whisper`, `deep-translator`) are all pinned only by name in
+`faster-whisper`, `deep-translator`, `babel`) are all pinned only by name in
 `requirements.txt`. Backends not used by current CLI flags may go
 unimported; but they are still installed by `pip install -r
 requirements.txt` so the user can swap backends without re-installing.
