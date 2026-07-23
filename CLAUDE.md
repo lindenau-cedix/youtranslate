@@ -4,10 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Letzter Durchlauf
 
-Die automatisch eingebrannten Untertitel wurden deutlich verkleinert: Die
-resolutionsabhängige Standardschriftgröße nutzt jetzt `height / 100` mit einem
-Bereich von 10–24 statt `height / 28` mit 16–48. Die explizite `--font-size`
-Option bleibt unverändert und überschreibt den Auto-Wert weiterhin.
+Merge-Konflikt in `CLAUDE.md` (gleichzeitig `AGENTS.md` über Symlink) aufgelöst:
+Die Zeilen 93–104 enthielten `<<<<<<< HEAD` / `=======` / `>>>>>>>`
+Marker, die zwei konkurrierende Beschreibungen der gleichen Code-Stellen
+mischten. Tatsächlich enthält `youtranslate.py` **beide** Änderungen
+– `font_size = max(10, min(24, int(height / 100)))` (Z. 425) **und**
+den `--burn-encoder {auto,nvenc,libx264}` Schalter (Z. 586–589, 670–672).
+Der Konflikt war rein dokumentarisch; die Codebasis ist konsistent. Der
+resolvierte Block dokumentiert beide Features korrekt und beschreibt auch
+das Auto/NVENC/libx264-Verhalten einschließlich der `--soft-subs`-
+Alternative für bit-exakte Wiedergabe.
 
 ## What this is
 
@@ -90,18 +96,12 @@ Source and target languages are independent.
   (failing on first call) is confusing.
 - **libass `force_style` in `burn_subtitles()`** uses ASS color hex
   (`&H00BBGGRR&` with full alpha being `&H00` — note the inverted RGB).
-<<<<<<< HEAD
-  Auto font size is `height / 28` clamped to `[16, 48]`. The video
+  Auto font size is `height / 100` clamped to `[10, 24]` for compact default
+  subtitles. Pass `--font-size` to override it explicitly. The video
   encoder is no longer hardcoded — `--burn-encoder {auto,nvenc,libx264}`
   picks between NVENC (quality knob: `-cq 22`) and libx264 (CRF 22). If
   the user wants the source video bit-exactly, they must use `--soft-subs`
   (mov_text stream), not a flag here.
-=======
-  Auto font size is `height / 100` clamped to `[10, 24]` for compact default
-  subtitles. Pass `--font-size` to override it explicitly. H.264 CRF 22
-  is hard-coded; if the user wants the source video bit-exactly, they
-  must use `--soft-subs` (mov_text stream), not a flag here.
->>>>>>> e424b25f077b28cf7e2b61d5c3cf9de574caf0a0
 
 ## Running / developing
 
