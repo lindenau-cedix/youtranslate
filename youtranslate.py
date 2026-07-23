@@ -376,6 +376,27 @@ def ffprobe_dimensions(video_path: Path) -> tuple[int, int]:
     return int(w), int(h)
 
 
+def ffmpeg_has_encoder(name: str) -> bool:
+    """Return True if the system ffmpeg binary advertises the named encoder.
+
+    Used to detect NVENC support (`h264_nvenc`, `hevc_nvenc`) at runtime so the
+    script can fall back to libx264 when GPU encoding isn't available. ffmpeg
+    lists every supported encoder on stderr when `-encoders` is passed.
+    """
+    ensure_tool("ffmpeg")
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"],
+        capture_output=True, text=True,
+    )
+    # Each line of `ffmpeg -encoders` is like: " V..... = Video codec ..." then
+    # " V....D h264_nvenc ..." The encoder name appears as the second column.
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == name:
+            return True
+    return False
+
+
 def burn_subtitles(
     video_path: Path,
     srt_path: Path,
@@ -384,8 +405,15 @@ def burn_subtitles(
     font: str = "Arial",
     font_size: Optional[int] = None,
     margin_v: int = 30,
+    encoder: str = "auto",
 ) -> None:
-    """Burn SRT subtitles into a copy of the video using ffmpeg + libass."""
+    """Burn SRT subtitles into a copy of the video using ffmpeg + libass.
+
+    `encoder` selects the video encoder:
+      - "auto"    : use h264_nvenc if ffmpeg was built with NVENC, else libx264.
+      - "nvenc"   : force h264_nvenc (errors out if ffmpeg doesn't support it).
+      - "libx264" : force the CPU encoder.
+    """
     ensure_tool("ffmpeg")
     ensure_tool("ffprobe")
 
@@ -409,18 +437,62 @@ def burn_subtitles(
     )
     vf = f"subtitles={srt_path}:si=0:force_style='{force_style}'"
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(video_path),
-        "-vf", vf,
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "22",
-        "-c:a", "copy",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
+    # Resolve the encoder. NVENC gives 5–15× speedup over libx264 with no
+    # perceptual quality loss; libx264 is the universal fallback.
+    if encoder == "auto":
+        use_nvenc = ffmpeg_has_encoder("h264_nvenc")
+        if use_nvenc:
+            print("  using NVIDIA NVENC encoder (h264_nvenc)")
+        else:
+            print("  using CPU encoder (libx264) — "
+                  "h264_nvenc not found in this ffmpeg build")
+    elif encoder == "nvenc":
+        if not ffmpeg_has_encoder("h264_nvenc"):
+            raise SystemExit(
+                "--burn-encoder nvenc requested, but this ffmpeg build does not "
+                "advertise h264_nvenc. See README for instructions on building "
+                "ffmpeg with --enable-nvenc."
+            )
+        use_nvenc = True
+        print("  using NVIDIA NVENC encoder (h264_nvenc)")
+    elif encoder == "libx264":
+        use_nvenc = False
+        print("  using CPU encoder (libx264)")
+    else:
+        raise SystemExit(f"unknown --burn-encoder '{encoder}'")
+
+    if use_nvenc:
+        # NVENC: `-rc vbr -cq N -b:v 0` is the constant-quality mode analogous
+        # to libx264's CRF. `-preset p4` ≈ libx264's "medium". `-hwaccel cuda`
+        # decodes on the GPU too, shaving more time off large videos.
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hwaccel", "cuda",
+            "-i", str(video_path),
+            "-vf", vf,
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-rc", "vbr",
+            "-cq", "22",
+            "-b:v", "0",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", str(video_path),
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "22",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
     print("  $ ffmpeg " + " ".join(cmd[1:]))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -506,6 +578,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "mov_text sidecar stream in the .<src>.<tgt>.mp4 container."
         ),
     )
+    parser.add_argument(
+        "--burn-encoder",
+        default="auto",
+        choices=["auto", "nvenc", "libx264"],
+        help=(
+            "Video encoder for the subtitled output. 'auto' picks h264_nvenc "
+            "when available, else libx264. 'nvenc' requires an ffmpeg build with "
+            "--enable-nvenc and an NVIDIA GPU. Ignored with --soft-subs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Fail fast with a clear message if the user picked an OpenAI backend but
@@ -585,6 +667,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             font=args.font,
             font_size=args.font_size,
             margin_v=args.margin_v,
+            encoder=args.burn_encoder,
         )
     print(f"  wrote: {out_video.name}")
 

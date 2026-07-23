@@ -21,7 +21,7 @@ and the two translators stay swappable.
 | 1. Download | `download()` | `yt-dlp` | (fixed) |
 | 2. Transcribe | `transcribe_faster_whisper()` / `transcribe_openai_whisper()` | **`openai-whisper`** (local) | `--engine` |
 | 3. Translate | `translate_segments_deep()` / `translate_segments_openai()` | **`openai`** (Chat Completions) | `--translator` |
-| 4. Burn / attach | `burn_subtitles()` (libass) or the soft-sub branch in `main()` | ffmpeg + libass, hardcoded | `--soft-subs` |
+| 4. Burn / attach | `burn_subtitles()` (libass + ffmpeg) or the soft-sub branch in `main()` | ffmpeg + libass; `h264_nvenc` if available, else `libx264` | `--soft-subs`, `--burn-encoder {auto,nvenc,libx264}` |
 
 `transcribe()` returns `(segments, detected_lang)` — both backends expose
 Whisper's detected source code, and `main()` uses it for filenames and
@@ -33,6 +33,15 @@ slower per call). `openai` uses `gpt-4o-mini` (override via
 `OPENAI_TRANSLATE_MODEL`). Both translate per-segment to preserve
 Whisper's exact timing — do not "improve" this by translating the whole
 transcript and re-aligning; it's a documented trade-off in the README.
+
+Stage 4 has a GPU path: `ffmpeg_has_encoder(name)` probes the system ffmpeg
+for an encoder (e.g. `h264_nvenc`) by parsing `ffmpeg -encoders` output.
+`burn_subtitles(encoder=...)` then chooses `h264_nvenc` with
+`-rc vbr -cq 22 -b:v 0 -preset p4` (5–15× faster than libx264 with no
+perceptual quality loss), or falls back to `libx264 -crf 22`. NVENC
+requires an ffmpeg built with `--enable-nvenc`; the README has the full
+Debian/Ubuntu build recipe. `--soft-subs` skips this stage entirely (no
+video re-encode — subtitles are attached as a `mov_text` stream).
 
 ## Languages
 
@@ -74,9 +83,11 @@ Source and target languages are independent.
   (failing on first call) is confusing.
 - **libass `force_style` in `burn_subtitles()`** uses ASS color hex
   (`&H00BBGGRR&` with full alpha being `&H00` — note the inverted RGB).
-  Auto font size is `height / 28` clamped to `[16, 48]`. H.264 CRF 22
-  is hard-coded; if the user wants the source video bit-exactly, they
-  must use `--soft-subs` (mov_text stream), not a flag here.
+  Auto font size is `height / 28` clamped to `[16, 48]`. The video
+  encoder is no longer hardcoded — `--burn-encoder {auto,nvenc,libx264}`
+  picks between NVENC (quality knob: `-cq 22`) and libx264 (CRF 22). If
+  the user wants the source video bit-exactly, they must use `--soft-subs`
+  (mov_text stream), not a flag here.
 
 ## Running / developing
 

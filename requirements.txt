@@ -4,14 +4,14 @@
 # Video + audio download.
 yt-dlp
 
-# Transcription (default).
+# Transcription (default is openai-whisper; faster-whisper is the GPU-friendly alt).
 faster-whisper
 
-# Translation (default). Uses the public Google Translate endpoint.
+# Translation (default is openai; deep-translator is the free Google Translate alt).
 deep-translator
 
 # Optional — only needed if you switch to --engine openai-whisper or
-# --translator openai.
+# --translator openai (which are the CLI defaults).
 openai-whisper
 openai
 

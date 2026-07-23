@@ -71,6 +71,7 @@ This will additionally produce `<title>.en.srt` (original) and
 | `--translator` | `openai` or `deep` (Google, free) | `openai` |
 | `--target-lang` | Output subtitle language code (e.g. `de`, `fr`, `es`, `pt-BR`) | `de` |
 | `--soft-subs` | Attach subtitles as a separate (toggleable) stream instead of burning them | off |
+| `--burn-encoder` | Video encoder for the subtitled output: `auto`, `nvenc`, or `libx264` | `auto` |
 | `--font` | Font name passed to libass (use `DejaVu Sans` on Linux) | `Arial` |
 | `--font-size` | Pixel size of subtitle text | auto |
 | `--margin-v` | Distance (px) from bottom of frame | `30` |
@@ -107,6 +108,143 @@ Embed the subtitles as a soft (toggleable) track:
 ```bash
 python youtranslate.py "URL" --soft-subs
 ```
+
+## GPU-accelerated subtitle burn (NVENC)
+
+By default `--burn-encoder auto` picks `h264_nvenc` (NVIDIA's hardware H.264
+encoder) when it's available, and falls back to `libx264` (CPU) otherwise.
+NVENC typically gives **5–15× faster** encoding with no perceptible quality
+loss versus the libx264 path. Audio is still `-c:a copy` in both cases.
+
+### Check if your ffmpeg already supports NVENC
+
+Most distro packages of ffmpeg (`apt install ffmpeg`, `brew install ffmpeg`)
+are built **without** `--enable-nvenc`. Test yours:
+
+```bash
+ffmpeg -hide_banner -encoders 2>/dev/null | grep nvenc
+```
+
+If you see `h264_nvenc` (and ideally `hevc_nvenc`) listed, you're done — the
+script will use it automatically. If not, you'll need an ffmpeg that was built
+with NVENC enabled.
+
+### Build ffmpeg from source with `--enable-nvenc`
+
+On Debian / Ubuntu (tested against 22.04 and 24.04). The build takes ~10–20 min
+and produces a static-ish `ffmpeg`/`ffprobe` in `/usr/local/bin`.
+
+1. **Install the NVIDIA driver** if you haven't already. You only need the
+   proprietary driver, not the full CUDA toolkit:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y nvidia-driver-560   # or whatever `ubuntu-drivers devices` recommends
+   sudo reboot
+   nvidia-smi                                 # should show your GPU
+   ```
+
+2. **Install build dependencies.** `libnvidia-encode-...` headers are the
+   critical ones — without them, `./configure` will silently skip NVENC:
+
+   ```bash
+   sudo apt-get install -y \
+       build-essential pkg-config yasm nasm \
+       libx264-dev libx265-dev libvpx-dev libmp3lame-dev libopus-dev libvorbis-dev \
+       libfdk-aac-dev libass-dev libfreetype-dev libfontconfig1-dev \
+       libnvidia-encode-560 libnvidia-decode-560 libnvidia-utils-560 \
+       libtool libssl-dev
+   ```
+
+   The package suffix (`560`) should match the driver version you installed in
+   step 1. If `apt` doesn't find `libnvidia-encode-*`, install
+   `nvidia-cuda-toolkit` or pick the version that matches your driver.
+
+3. **Get the ffmpeg source.** Latest stable as of writing is 7.x:
+
+   ```bash
+   cd /tmp
+   wget https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+   tar xf ffmpeg-7.1.tar.xz
+   cd ffmpeg-7.1
+   ```
+
+4. **Configure with NVENC enabled:**
+
+   ```bash
+   ./configure \
+       --enable-gpl \
+       --enable-nonfree \
+       --enable-cuda-nvcc \
+       --enable-libnvenc \
+       --enable-libx264 \
+       --enable-libx265 \
+       --enable-libvpx \
+       --enable-libmp3lame \
+       --enable-libopus \
+       --enable-libvorbis \
+       --enable-libfdk-aac \
+       --enable-libass \
+       --enable-libfreetype \
+       --enable-libfontconfig \
+       --extra-cflags=-I/usr/local/cuda/include \
+       --extra-ldflags=-L/usr/local/cuda/lib64
+   ```
+
+   The two important flags are `--enable-cuda-nvcc` and `--enable-libnvenc`.
+   Without them, NVENC will not appear in the encoder list. If `./configure`
+   prints "WARNING: libnvenc not found" at the end, your
+   `libnvidia-encode-*` package is missing or the version doesn't match your
+   driver — fix that before building.
+
+5. **Build and install:**
+
+   ```bash
+   make -j"$(nproc)"
+   sudo make install
+   sudo ldconfig
+   ```
+
+6. **Verify:**
+
+   ```bash
+   hash -r                                 # refresh PATH cache
+   which ffmpeg                            # should be /usr/local/bin/ffmpeg
+   ffmpeg -hide_banner -encoders 2>/dev/null | grep nvenc
+   # expect:
+   #  V..... h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
+   #  V..... hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
+   nvidia-smi                               # confirm driver still loads
+   ```
+
+### macOS and Windows
+
+- **macOS:** Apple's hardware H.264 encoder is exposed via VideoToolbox. ffmpeg
+  can use it as `h264_videotoolbox`, which `burn_subtitles()` does not select
+  automatically. To use it, edit the encoder block in `burn_subtitles()` to
+  add an `elif encoder == "videotoolbox":` branch with `-c:v h264_videotoolbox
+  -q:v 22`, or use `--burn-encoder libx264`. Apple Silicon Macs work; Intel
+  Macs need a CPU with QuickSync.
+- **Windows:** Build or download a BtbN NVENC-enabled ffmpeg from
+  https://github.com/BtbN/ffmpeg-builds — pick a `shared` or `git` build with
+  `nvenc` in the filename. Drop the two `.exe` files somewhere on your PATH.
+
+### Usage
+
+```bash
+# Let the script auto-pick (uses NVENC if ffmpeg supports it, else libx264):
+python youtranslate.py "URL"
+
+# Force NVENC (errors out if unavailable):
+python youtranslate.py "URL" --burn-encoder nvenc
+
+# Force CPU libx264 (e.g., for benchmarking or bit-exact reproducibility):
+python youtranslate.py "URL" --burn-encoder libx264
+```
+
+The script prints which encoder it's using before invoking ffmpeg, so you'll
+see `using NVIDIA NVENC encoder (h264_nvenc)` or `using CPU encoder (libx264)`
+on stderr-equivalent output.
 
 ## Notes & caveats
 
