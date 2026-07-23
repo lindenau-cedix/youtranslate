@@ -418,9 +418,11 @@ def burn_subtitles(
     ensure_tool("ffprobe")
 
     width, height = ffprobe_dimensions(video_path)
-    # Auto-pick a sensible font size based on resolution.
+    # Auto-pick a compact font size based on resolution.  The previous ratio
+    # produced oversized subtitles on high-resolution videos; this keeps the
+    # default roughly 3–4x smaller while remaining readable on smaller frames.
     if font_size is None:
-        font_size = max(16, min(48, int(height / 28)))
+        font_size = max(10, min(24, int(height / 100)))
 
     # libass force_style — names follow ASS spec. Alignment=2 = bottom-center.
     force_style = (

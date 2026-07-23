@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Letzter Durchlauf
+
+Die automatisch eingebrannten Untertitel wurden deutlich verkleinert: Die
+resolutionsabhängige Standardschriftgröße nutzt jetzt `height / 100` mit einem
+Bereich von 10–24 statt `height / 28` mit 16–48. Die explizite `--font-size`
+Option bleibt unverändert und überschreibt den Auto-Wert weiterhin.
+
 ## What this is
 
 `youtranslate` is a single-file CLI tool that downloads a YouTube video in
@@ -83,11 +90,18 @@ Source and target languages are independent.
   (failing on first call) is confusing.
 - **libass `force_style` in `burn_subtitles()`** uses ASS color hex
   (`&H00BBGGRR&` with full alpha being `&H00` — note the inverted RGB).
+<<<<<<< HEAD
   Auto font size is `height / 28` clamped to `[16, 48]`. The video
   encoder is no longer hardcoded — `--burn-encoder {auto,nvenc,libx264}`
   picks between NVENC (quality knob: `-cq 22`) and libx264 (CRF 22). If
   the user wants the source video bit-exactly, they must use `--soft-subs`
   (mov_text stream), not a flag here.
+=======
+  Auto font size is `height / 100` clamped to `[10, 24]` for compact default
+  subtitles. Pass `--font-size` to override it explicitly. H.264 CRF 22
+  is hard-coded; if the user wants the source video bit-exactly, they
+  must use `--soft-subs` (mov_text stream), not a flag here.
+>>>>>>> e424b25f077b28cf7e2b61d5c3cf9de574caf0a0
 
 ## Running / developing
 
