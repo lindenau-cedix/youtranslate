@@ -14,3 +14,7 @@ deep-translator
 # --translator openai.
 openai-whisper
 openai
+
+# Resolves language codes (e.g. "fr") to English display names ("French") for
+# the OpenAI translator prompt and the final status printout.
+babel

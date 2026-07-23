@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-youtranslate — Download an English YouTube video, transcribe it, translate the
-speech to German, and burn the German subtitles into the video.
+youtranslate — Download a YouTube video in any language, transcribe it,
+translate the speech to another language, and burn the translated subtitles
+into the video.
 
 Pipeline:
     1. yt-dlp downloads the video (best video + best audio, muxed to mp4).
-    2. faster-whisper (or openai-whisper) transcribes the audio to English segments.
-    3. deep-translator (Google, free) or OpenAI translates each segment to German.
-    4. ffmpeg + libass burns the German SRT into a copy of the video.
+    2. faster-whisper (or openai-whisper) transcribes the audio to segments
+       in the source language.
+    3. deep-translator (Google, free) or OpenAI translates each segment to the
+       target language.
+    4. ffmpeg + libass burns the translated SRT into a copy of the video.
 
 Outputs (in --output dir):
-    <title>.de.subtitled.mp4   — video with German subtitles burned in.
-    <title>.en.srt             — original English subtitles (kept for reference).
-    <title>.de.srt             — German subtitles (kept for reference unless
-                                 --no-keep-srt is passed).
+    <title>.<src>.<tgt>.subtitled.mp4   — video with translated subtitles burned in.
+    <title>.<src>.srt                  — original source subtitles (kept for reference).
+    <title>.<src>.<tgt>.srt            — translated subtitles (kept for reference unless
+                                         --no-keep-srt is passed).
 
 Example:
     python youtranslate.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \\
-        --output ./out --model small
+        --output ./out --model small --source-lang en --target-lang de
 """
 
 from __future__ import annotations
@@ -102,6 +105,24 @@ def wrap_text(text: str, width: int = 80) -> str:
     return "\n".join(out_lines)
 
 
+def human_lang_name(code: str) -> str:
+    """Resolve an ISO-639 (or BCP-47) code to its English display name.
+
+    Examples: "fr" → "French", "pt-BR" → "Brazilian Portuguese", "en" → "English".
+    Falls back to the raw code if babel can't resolve it (e.g. user passes a
+    custom tag).
+    """
+    try:
+        from babel import Locale
+        from babel.core import UnknownLocaleError
+    except ImportError:
+        return code
+    try:
+        return Locale.parse(code).get_display_name("en")
+    except (UnknownLocaleError, ValueError):
+        return code
+
+
 # --- Step 1: download -------------------------------------------------------
 
 
@@ -152,8 +173,8 @@ def download(url: str, out_dir: Path) -> Path:
 
 
 def transcribe_faster_whisper(
-    video_path: Path, model_size: str
-) -> List[Segment]:
+    video_path: Path, model_size: str, source_lang: str
+) -> tuple[List[Segment], str]:
     try:
         from faster_whisper import WhisperModel
     except ImportError as e:
@@ -166,21 +187,27 @@ def transcribe_faster_whisper(
     # good precision for the chosen device (float16 on GPU, int8 on CPU by default).
     model = WhisperModel(model_size, device="auto", compute_type="auto")
 
-    segments_iter, info = model.transcribe(
-        str(video_path), language="en", task="transcribe"
-    )
+    # When source_lang is "auto", drop the language kwarg so Whisper runs its
+    # own detection on the first 30s. Otherwise pin the language explicitly.
+    # task="transcribe" — we want the source-language text; the per-segment
+    # translator (deep / openai) handles the language conversion.
+    transcribe_kwargs = {"task": "transcribe"}
+    if source_lang != "auto":
+        transcribe_kwargs["language"] = source_lang
+
+    segments_iter, info = model.transcribe(str(video_path), **transcribe_kwargs)
     print(f"  detected language: {info.language} "
           f"(probability {info.language_probability:.2f})")
 
     out: List[Segment] = []
     for seg in segments_iter:
         out.append(Segment(start=float(seg.start), end=float(seg.end), text=seg.text.strip()))
-    return out
+    return out, info.language
 
 
 def transcribe_openai_whisper(
-    video_path: Path, model_size: str
-) -> List[Segment]:
+    video_path: Path, model_size: str, source_lang: str
+) -> tuple[List[Segment], str]:
     try:
         import whisper  # openai-whisper
     except ImportError as e:
@@ -190,7 +217,10 @@ def transcribe_openai_whisper(
         ) from e
 
     model = whisper.load_model(model_size)
-    result = model.transcribe(str(video_path), language="en", task="transcribe")
+    transcribe_kwargs = {"task": "transcribe"}
+    if source_lang != "auto":
+        transcribe_kwargs["language"] = source_lang
+    result = model.transcribe(str(video_path), **transcribe_kwargs)
 
     out: List[Segment] = []
     for seg in result.get("segments", []):
@@ -201,16 +231,17 @@ def transcribe_openai_whisper(
                 text=seg["text"].strip(),
             )
         )
-    return out
+    detected = result.get("language", source_lang)
+    return out, detected
 
 
 def transcribe(
-    video_path: Path, model_size: str, engine: str
-) -> List[Segment]:
+    video_path: Path, model_size: str, engine: str, source_lang: str
+) -> tuple[List[Segment], str]:
     if engine == "faster-whisper":
-        return transcribe_faster_whisper(video_path, model_size)
+        return transcribe_faster_whisper(video_path, model_size, source_lang)
     elif engine == "openai-whisper":
-        return transcribe_openai_whisper(video_path, model_size)
+        return transcribe_openai_whisper(video_path, model_size, source_lang)
     raise SystemExit(f"unknown engine '{engine}'")
 
 
@@ -258,7 +289,7 @@ def translate_segments_deep(
 
 
 def translate_segments_openai(
-    segments: Sequence[Segment], target_lang_human: str = "German"
+    segments: Sequence[Segment], target_lang_human: str
 ) -> List[Segment]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -304,19 +335,14 @@ def translate_segments_openai(
     return out
 
 
-_LANG_HUMAN = {"de": "German", "fr": "French", "es": "Spanish", "it": "Italian",
-               "pt": "Portuguese", "nl": "Dutch", "pl": "Polish", "ru": "Russian"}
-
-
 def translate_segments(
-    segments: Sequence[Segment], translator: str, target_lang: str = "de"
+    segments: Sequence[Segment], translator: str, target_lang: str,
+    target_lang_human: str,
 ) -> List[Segment]:
     if translator == "deep":
         return translate_segments_deep(segments, target_lang=target_lang)
     if translator == "openai":
-        return translate_segments_openai(
-            segments, target_lang_human=_LANG_HUMAN.get(target_lang, target_lang)
-        )
+        return translate_segments_openai(segments, target_lang_human=target_lang_human)
     raise SystemExit(f"unknown translator '{translator}'")
 
 
@@ -409,8 +435,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="youtranslate",
         description=(
-            "Download an English YouTube video, transcribe it, translate the "
-            "speech to German, and burn the German subtitles into the video."
+            "Download a YouTube video, transcribe it, translate the speech to "
+            "another language, and burn the translated subtitles into the video."
         ),
     )
     parser.add_argument("url", help="YouTube video URL")
@@ -431,6 +457,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Transcription engine (default: openai-whisper).",
     )
     parser.add_argument(
+        "--source-lang",
+        default="auto",
+        help=(
+            "Source language code (e.g. en, fr, de, ja) or 'auto' to let "
+            "Whisper detect from the audio. Default: auto."
+        ),
+    )
+    parser.add_argument(
         "--translator",
         default="openai",
         choices=["deep", "openai"],
@@ -439,14 +473,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--target-lang",
         default="de",
-        help="Target language code for the subtitles (default: de = German).",
+        help=(
+            "Target language code for the subtitles (default: de = German). "
+            "Examples: fr, es, ja, pt-BR."
+        ),
     )
     parser.add_argument(
         "--keep-srt",
         action="store_true",
         help=(
-            "Keep the .en.srt and .<lang>.srt subtitle files alongside the "
-            "subtitled video. By default only the subtitled video is kept."
+            "Keep the .<src>.srt and .<src>.<tgt>.srt subtitle files alongside "
+            "the subtitled video. By default only the subtitled video is kept."
         ),
     )
     parser.add_argument(
@@ -466,7 +503,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help=(
             "Instead of burning the subtitles into the video, attach them as a "
-            "mov_text sidecar stream in the .<lang>.mp4 container."
+            "mov_text sidecar stream in the .<src>.<tgt>.mp4 container."
         ),
     )
     args = parser.parse_args(argv)
@@ -489,27 +526,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     base = video_path.stem
 
     # Step 2: transcribe
-    print(f"[2/4] Transcribing with {args.engine} (model={args.model})")
-    en_segments = transcribe(video_path, args.model, args.engine)
-    if not en_segments:
+    print(f"[2/4] Transcribing with {args.engine} (model={args.model}, "
+          f"source={args.source_lang})")
+    src_segments, detected_lang = transcribe(
+        video_path, args.model, args.engine, args.source_lang
+    )
+    if not src_segments:
         raise SystemExit("transcription produced no segments; nothing to translate.")
-    print(f"  got {len(en_segments)} English segments")
+    # If the user pinned --source-lang, that wins; otherwise use what Whisper
+    # detected (could be e.g. "en" or "fr" depending on the audio).
+    source_lang = args.source_lang if args.source_lang != "auto" else detected_lang
+    source_human = human_lang_name(source_lang)
+    print(f"  got {len(src_segments)} {source_human} segments")
 
     # Step 3: translate
-    print(f"[3/4] Translating to '{args.target_lang}' via {args.translator}")
-    de_segments = translate_segments(
-        en_segments, args.translator, target_lang=args.target_lang
+    target_human = human_lang_name(args.target_lang)
+    print(f"[3/4] Translating from {source_human} → {target_human} "
+          f"via {args.translator}")
+    tgt_segments = translate_segments(
+        src_segments, args.translator,
+        target_lang=args.target_lang, target_lang_human=target_human,
     )
 
-    en_srt = work / f"{base}.en.srt"
-    de_srt = work / f"{base}.{args.target_lang}.srt"
-    write_srt(en_segments, en_srt)
-    write_srt(de_segments, de_srt)
-    print(f"  wrote subtitles: {en_srt.name}, {de_srt.name}")
+    src_srt = work / f"{base}.{source_lang}.srt"
+    tgt_srt = work / f"{base}.{source_lang}.{args.target_lang}.srt"
+    write_srt(src_segments, src_srt)
+    write_srt(tgt_segments, tgt_srt)
+    print(f"  wrote subtitles: {src_srt.name}, {tgt_srt.name}")
 
     # Step 4: burn (or attach) subtitles
     print(f"[4/4] {'Burning' if not args.soft_subs else 'Attaching'} subtitles")
-    out_video = work / f"{base}.{args.target_lang}.subtitled.mp4"
+    out_video = work / f"{base}.{source_lang}.{args.target_lang}.subtitled.mp4"
 
     if args.soft_subs:
         # Attach as a separate (mov_text) stream — viewer can toggle them on/off.
@@ -517,7 +564,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
-            "-i", str(de_srt),
+            "-i", str(tgt_srt),
             "-c:v", "copy",
             "-c:a", "copy",
             "-c:s", "mov_text",
@@ -533,7 +580,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         burn_subtitles(
             video_path,
-            de_srt,
+            tgt_srt,
             out_video,
             font=args.font,
             font_size=args.font_size,
@@ -542,7 +589,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"  wrote: {out_video.name}")
 
     if not args.keep_srt:
-        for f in (en_srt, de_srt):
+        for f in (src_srt, tgt_srt):
             try:
                 f.unlink()
             except FileNotFoundError:
@@ -550,10 +597,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     print()
     print("Done.")
-    print(f"  Video with German subtitles : {out_video}")
+    print(f"  Video with {target_human} subtitles : {out_video}")
     if args.keep_srt:
-        print(f"  English subtitles            : {en_srt}")
-        print(f"  German subtitles             : {de_srt}")
+        print(f"  {source_human} subtitles            : {src_srt}")
+        print(f"  {target_human} subtitles            : {tgt_srt}")
     return 0
 
 

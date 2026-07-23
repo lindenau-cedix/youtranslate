@@ -1,7 +1,7 @@
 # youtranslate
 
-Download an English YouTube video, transcribe it, translate the speech to
-German, and burn the German subtitles into the video.
+Download a YouTube video in any language, transcribe it, translate the speech
+to another language, and burn the translated subtitles into the video.
 
 ## Pipeline
 
@@ -12,13 +12,13 @@ YouTube URL
 [1] yt-dlp              downloads best video+audio, muxed to mp4
     │
     ▼
-[2] openai-whisper      transcribes audio → English segments with timestamps
+[2] openai-whisper      transcribes audio → segments in the source language
     │
     ▼
-[3] OpenAI Chat API     gpt-4o-mini, per segment → German segments
+[3] OpenAI Chat API     gpt-4o-mini, per segment → target-language segments
     │
     ▼
-[4] ffmpeg + libass     burns German SRT into a copy of the video
+[4] ffmpeg + libass     burns the translated SRT into a copy of the video
 ```
 
 ## Requirements
@@ -47,8 +47,10 @@ export OPENAI_API_KEY=sk-...
 python youtranslate.py "https://www.youtube.com/watch?v=VIDEO_ID" --output ./out
 ```
 
-That produces `./out/<title>.de.subtitled.mp4` — the original video with German
-subtitles hardcoded on the bottom.
+That produces `./out/<title>.en.de.subtitled.mp4` — the original video with German
+subtitles hardcoded on the bottom. The `<src>.<tgt>` naming reflects the source
+language Whisper detected (or the `--source-lang` you pinned) and the target
+language you asked for.
 
 If you'd like to keep the subtitle files alongside the video:
 
@@ -56,8 +58,8 @@ If you'd like to keep the subtitle files alongside the video:
 python youtranslate.py "URL" --output ./out --keep-srt
 ```
 
-This will additionally produce `<title>.en.srt` (original) and `<title>.de.srt`
-(translated).
+This will additionally produce `<title>.en.srt` (original) and
+`<title>.en.de.srt` (translated).
 
 ### Useful flags
 
@@ -65,8 +67,9 @@ This will additionally produce `<title>.en.srt` (original) and `<title>.de.srt`
 |---|---|---|
 | `--model` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3` | `small` |
 | `--engine` | `openai-whisper` or `faster-whisper` | `openai-whisper` |
+| `--source-lang` | Source language code (`en`, `fr`, `de`, `ja`, ...) or `auto` to let Whisper detect | `auto` |
 | `--translator` | `openai` or `deep` (Google, free) | `openai` |
-| `--target-lang` | Target language code (e.g. `de`, `fr`, `es`) | `de` |
+| `--target-lang` | Output subtitle language code (e.g. `de`, `fr`, `es`, `pt-BR`) | `de` |
 | `--soft-subs` | Attach subtitles as a separate (toggleable) stream instead of burning them | off |
 | `--font` | Font name passed to libass (use `DejaVu Sans` on Linux) | `Arial` |
 | `--font-size` | Pixel size of subtitle text | auto |
@@ -80,7 +83,13 @@ Use the larger, more accurate Whisper model on a long lecture:
 python youtranslate.py "URL" --model medium
 ```
 
-Translate to French instead of German:
+Translate a French video to Spanish (pin the source language):
+
+```bash
+python youtranslate.py "URL" --source-lang fr --target-lang es
+```
+
+Let Whisper detect the source language and translate to French:
 
 ```bash
 python youtranslate.py "URL" --target-lang fr
