@@ -18,3 +18,20 @@ openai
 # Resolves language codes (e.g. "fr") to English display names ("French") for
 # the OpenAI translator prompt and the final status printout.
 babel
+
+# --- Dubbing (--dub) -------------------------------------------------------
+# Source separation: splits the audio into vocals + background so the original
+# speech can be removed while music/ambience/noise are kept. Pulls in torch,
+# numpy and soundfile as transitive deps.
+demucs
+
+# Used directly by the dubbing stage to lay out and mix the synthesized speech
+# over the preserved background. (Also pulled in by demucs, but listed here
+# because youtranslate.py imports them itself.)
+numpy
+soundfile
+
+# Text-to-speech backends for --dub are reached over HTTP (stdlib urllib), so
+# they need no extra Python packages — only an API key in the environment:
+#   ElevenLabs (default): export ELEVENLABS_API_KEY=...
+#   OpenAI     (--tts openai): reuses OPENAI_API_KEY.
